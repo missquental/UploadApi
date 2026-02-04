@@ -1,111 +1,99 @@
 import streamlit as st
-import requests
-from io import BytesIO
-import time
+from fastapi import FastAPI, File, UploadFile, HTTPException
+import uvicorn
+import os
+import shutil
+from datetime import datetime
 
-# Konfigurasi halaman
-st.set_page_config(
-    page_title="Video Upload via API",
-    page_icon="🎥",
-    layout="centered"
-)
+# Create uploads directory
+UPLOAD_DIR = "uploads"
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
 
-# Judul aplikasi
-st.title("📤 Upload Video via API")
-st.markdown("---")
+# Initialize FastAPI app
+app = FastAPI(title="Video Upload API")
 
-# Informasi API endpoint
-API_URL = "https://live.streamlit.app/api/upload"  # Ganti dengan URL API yang sesuai
-
-# File uploader untuk video
-uploaded_file = st.file_uploader(
-    "Pilih file video untuk diupload",
-    type=["mp4", "avi", "mov", "mkv", "webm"],
-    accept_multiple_files=False
-)
-
-if uploaded_file is not None:
-    # Menampilkan informasi file
-    file_details = {
-        "Nama File": uploaded_file.name,
-        "Tipe File": uploaded_file.type,
-        "Ukuran File": f"{uploaded_file.size / (1024*1024):.2f} MB"
-    }
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Informasi File")
-        for key, value in file_details.items():
-            st.write(f"**{key}:** {value}")
-    
-    with col2:
-        st.subheader("Preview")
-        st.video(uploaded_file)
+@app.post("/api/upload")
+async def upload_video(file: UploadFile = File(...)):
+    try:
+        # Generate unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_{file.filename}"
+        file_path = os.path.join(UPLOAD_DIR, filename)
         
-    # Tombol upload
-    if st.button("📤 Upload ke API", type="primary"):
-        try:
-            with st.spinner("Mengupload video... Mohon tunggu"):
-                # Membaca konten file
-                file_content = uploaded_file.read()
-                
-                # Mempersiapkan file untuk dikirim
-                files = {
-                    'file': (
-                        uploaded_file.name,
-                        BytesIO(file_content),
-                        uploaded_file.type
-                    )
-                }
-                
-                # Mengirim request ke API
-                response = requests.post(
-                    API_URL,
-                    files=files,
-                    timeout=300  # Timeout 5 menit
-                )
-                
-                # Memeriksa respons
-                if response.status_code == 200:
-                    st.success("✅ Video berhasil diupload!")
-                    st.json(response.json())
-                else:
-                    st.error(f"❌ Upload gagal! Status code: {response.status_code}")
-                    st.text(response.text)
-                    
-        except requests.exceptions.RequestException as e:
-            st.error(f"❌ Error koneksi: {str(e)}")
-        except Exception as e:
-            st.error(f"❌ Error tidak terduga: {str(e)}")
+        # Save file
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        return {
+            "status": "success",
+            "message": "File uploaded successfully",
+            "filename": filename,
+            "file_size": os.path.getsize(file_path),
+            "upload_time": timestamp
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Tabs untuk dokumentasi dan pengaturan
-tab1, tab2 = st.tabs(["📝 Dokumentasi", "⚙️ Pengaturan"])
+@app.get("/api/files")
+async def list_files():
+    files = []
+    if os.path.exists(UPLOAD_DIR):
+        for file in os.listdir(UPLOAD_DIR):
+            file_path = os.path.join(UPLOAD_DIR, file)
+            if os.path.isfile(file_path):
+                files.append({
+                    "name": file,
+                    "size": os.path.getsize(file_path),
+                    "modified": datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat()
+                })
+    return {"files": files}
 
-with tab1:
-    st.subheader("Cara Penggunaan")
+# Streamlit interface
+def main():
+    st.title("🎥 Video Upload Server")
+    st.markdown("---")
+    
+    # Display server status
+    st.success("✅ Server is running and ready to receive uploads!")
+    
+    # Show upload instructions
+    st.subheader("Upload Instructions")
     st.markdown("""
-    1. **Upload File**: Klik tombol 'Browse files' untuk memilih video
-    2. **Preview**: Preview video akan ditampilkan setelah file dipilih
-    3. **Upload**: Klik tombol 'Upload ke API' untuk mengirim video
-    4. **Hasil**: Lihat hasil upload dan respons dari API
+    Use the Tkinter client to upload videos to this server.
     
-    **Format yang didukung:** MP4, AVI, MOV, MKV, WEBM
+    **API Endpoints:**
+    - `POST /api/upload` - Upload video file
+    - `GET /api/files` - List uploaded files
     """)
-
-with tab2:
-    st.subheader("Konfigurasi API")
-    custom_api_url = st.text_input(
-        "Custom API URL",
-        value=API_URL,
-        help="Masukkan URL API kustom jika diperlukan"
-    )
     
-    if custom_api_url != API_URL:
-        st.info("URL API telah diubah. Gunakan tombol reset untuk kembali ke default.")
-        if st.button("🔄 Reset ke Default"):
-            st.experimental_rerun()
+    # Show uploaded files
+    st.subheader("Uploaded Files")
+    if os.path.exists(UPLOAD_DIR):
+        files = os.listdir(UPLOAD_DIR)
+        if files:
+            for file in files:
+                file_path = os.path.join(UPLOAD_DIR, file)
+                file_size = os.path.getsize(file_path)
+                modified_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                
+                col1, col2, col3 = st.columns([3, 2, 2])
+                col1.write(file)
+                col2.write(f"{file_size/1024/1024:.2f} MB")
+                col3.write(modified_time.strftime("%Y-%m-%d %H:%M"))
+        else:
+            st.info("No files uploaded yet")
+    else:
+        st.info("Upload directory not found")
 
-# Footer
-st.markdown("---")
-st.caption("Made with ❤️ using Streamlit")
+if __name__ == "__main__":
+    # Run both Streamlit and FastAPI
+    import threading
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "api":
+        # Run only API server
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    else:
+        # Run Streamlit app
+        main()
