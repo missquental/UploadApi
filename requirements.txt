@@ -20,3 +20,5 @@ requests
 gdown
 ffprobe
 fastapi
+uvicorn
+python-multipart
